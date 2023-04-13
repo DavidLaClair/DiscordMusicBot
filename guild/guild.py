@@ -1,17 +1,13 @@
 import discord
-from discord_ui import UI
-
 from player.player import Player
 
 
 class Guild:
-    def __init__(self, guild, client, api_key):
+    def __init__(self, guild, client):
         # Core Guild
         self.guild = guild
         self.client = client
-        self.ui = UI(self.client)
         self.voice_channel = None
-        self.api_key = api_key
 
         # Core Music
         self.audio_player = None
@@ -44,9 +40,10 @@ class Guild:
 
     def check_player(self):
         if not self.audio_player:
-            self.audio_player = Player(self.client, self.voice_channel, self.api_key, self.ui)
+            self.audio_player = Player(self.client, self.voice_channel)
+            self.audio_player.start_player()
 
-    async def add_song(self, url, member, request_channel):
+    async def add_media(self, media_type, url, member, request_channel):
         # Get the voice channel the member is connected to
         voice_channel = self.get_voice_channel(member)
 
@@ -60,25 +57,14 @@ class Guild:
         # Start the player
         self.check_player()
 
-        # Add the song to the queue
-        await self.audio_player.add_song(url, member, request_channel)
-
-    async def add_playlist(self, url, member, request_channel):
-        # Get the voice channel the member is connected to
-        voice_channel = self.get_voice_channel(member)
-
-        if not voice_channel:
-            # TODO: Warn user we couldn't find them
-            return
-
-        # Join the voice channel
-        await self.check_voice_channel(voice_channel)
-
-        # Start the player
-        self.check_player()
-
-        # Add the song to the queue
-        await self.audio_player.add_playlist(url, member, request_channel)
+        if media_type == "search":
+            await self.audio_player.add_search(url, member, request_channel)
+        elif media_type == "playlist":
+            await self.audio_player.add_playlist(url, member, request_channel)
+        elif media_type == "single":
+            await self.audio_player.add_song(url, member, request_channel)
+        else:
+            pass
 
     async def get_playlist_info(self, request_channel, url):
         self.check_player()

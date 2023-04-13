@@ -1,3 +1,4 @@
+import discord
 import yaml
 from discord.ext import commands
 
@@ -12,7 +13,9 @@ from guild.guild import Guild
 # TODO: Spotify?
 
 
-client = commands.Bot(command_prefix='#')
+intents = discord.Intents.default()
+intents.message_content = True
+client = commands.Bot(command_prefix='#', intents=intents)
 
 config_file_name = "config.yaml"
 config_file = open(config_file_name, "r")
@@ -36,7 +39,7 @@ guilds = {}
 async def on_ready():
     for guild in client.guilds:
         print(guild.name)
-        guilds[guild.id] = Guild(guild, client, pafy_api)
+        guilds[guild.id] = Guild(guild, client)
 
     print("Client is done initializing!")
 
@@ -49,12 +52,23 @@ def is_playlist(url):
     return False
 
 
+def is_search(url):
+    if "youtube" in url:
+        return False
+    elif "spotify" in url:
+        return False
+    else:
+        return True
+
+
 @client.command()
 async def play(context, *, url=None):
-    if is_playlist(url):
-        await guilds[context.guild.id].add_playlist(url, context.author, context.channel)
+    if is_search(url):
+        await guilds[context.guild.id].add_media("search", url, context.author, context.channel)
+    elif is_playlist(url):
+        await guilds[context.guild.id].add_media("playlist", url, context.author, context.channel)
     else:
-        await guilds[context.guild.id].add_song(url, context.author, context.channel)
+        await guilds[context.guild.id].add_media("single", url, context.author, context.channel)
 
 
 @client.command()
