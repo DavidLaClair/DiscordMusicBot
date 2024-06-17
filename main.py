@@ -1,15 +1,15 @@
 import discord
+import discord.ext.commands
 import yaml
 from discord.ext import commands
 
+import discord.ext
 from guild.guild import Guild
+from utilities import url
 
 # TODO: Goodbye
-# TODO: Make it faster getting the info from the video
 # TODO: Move things in queue
 # TODO: removing something from the queue
-# TODO: Timeout after inactivity (not playing anything)
-# TODO: Timeout after no one else is in voice channel
 # TODO: Spotify?
 
 
@@ -25,15 +25,7 @@ prod = config_file_yaml["prod"]
 bot_token = config_file_yaml["bot_token"]
 pafy_api = config_file_yaml["pafy_api"]
 
-if prod:
-    print("Starting prod")
-    log_name = "prod.log"
-else:
-    print("Starting dev")
-    log_name = "dev.log"
-
-guilds = {}
-
+guilds: dict[int, Guild] = {}
 
 @client.event
 async def on_ready():
@@ -44,59 +36,42 @@ async def on_ready():
     print("Client is done initializing!")
 
 
-def is_playlist(url):
-    if "/playlist?list" in url:
-        return True
-    elif "&list=" in url:
-        return True
-    return False
+@client.command()
+async def play(context: discord.ext.commands.Context, *, play_url: str=None):
+    voice_channel = guilds[context.guild.id].get_voice_channel(context.author)
+    
+    if not voice_channel:
+        await guilds[context.guild.id].send_embed(context.channel, "Error", "Could not find you in any voice channels!")
+        return
 
+    await guilds[context.guild.id].check_player(voice_channel)
 
-def is_search(url):
-    if "youtube" in url:
-        return False
-    elif "spotify" in url:
-        return False
+    if url.is_search(play_url):
+        await guilds[context.guild.id].add_media("search", play_url, context.author, context.channel)
+    elif url.is_playlist(play_url):
+        await guilds[context.guild.id].add_media("playlist", play_url, context.author, context.channel)
     else:
-        return True
+        await guilds[context.guild.id].add_media("single", play_url, context.author, context.channel)
 
 
 @client.command()
-async def play(context, *, url=None):
-    if is_search(url):
-        await guilds[context.guild.id].add_media("search", url, context.author, context.channel)
-    elif is_playlist(url):
-        await guilds[context.guild.id].add_media("playlist", url, context.author, context.channel)
-    else:
-        await guilds[context.guild.id].add_media("single", url, context.author, context.channel)
-
-
-@client.command()
-async def pause(context):
+async def pause(context: discord.ext.commands.Context):
     guilds[context.guild.id].pause()
 
 
 @client.command()
-async def resume(context):
+async def resume(context: discord.ext.commands.Context):
     guilds[context.guild.id].resume()
 
 
 @client.command()
-async def skip(context):
+async def skip(context: discord.ext.commands.Context):
     guilds[context.guild.id].skip()
 
 
 @client.command()
-async def queue(context):
+async def queue(context: discord.ext.commands.Context):
     await guilds[context.guild.id].queue(context.channel)
 
 
-@client.command()
-async def get_info(context, *, url=None):
-    if is_playlist(url):
-        await guilds[context.guild.id].get_playlist_info(context.channel, url)
-    else:
-        await guilds[context.guild.id].get_info(context.channel, url)
-
-
-client.run(bot_token)
+client.run(token=bot_token)

@@ -2,22 +2,25 @@ import asyncio
 import discord
 import yt_dlp
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from discord.ext import tasks
 
 from request.request import Request
 from play_queue.play_queue import PlayQueue
 from youtube_playlist.youtube_playlist import YoutubePlaylist
 from youtube_video.youtube_video import YoutubeVideo
+from utilities import youtube
 
 
 class Player:
-    def __init__(self, client, voice_channel):
-        self.client = client
-        self.voice_channel = voice_channel
-        self.play_queue = PlayQueue()
-        self.is_playing_event = asyncio.Event()
-        self.last_play_time = None
+    def __init__(self, client: discord.Client, voice_client: discord.VoiceClient):
+        self.client: discord.Client = client
+        self.voice_client: discord.VoiceClient = voice_client
+        self.play_queue: PlayQueue = PlayQueue()
+        self.is_playing_event: asyncio.Event = asyncio.Event()
+        self.last_play_time: datetime = None
+        self.is_reset: bool = False
+        self.timeout: float = 10
 
         # YouTube DL
         ydl_opts_audio_only = {
@@ -30,40 +33,55 @@ class Player:
             "extract_flat": "in_playlist",
             "subtitleslangs": ["-all"]
         }
-        self.yt_dlp_audio = yt_dlp.YoutubeDL(ydl_opts_audio_only)
+        self.yt_dlp_audio: yt_dlp.YoutubeDL = yt_dlp.YoutubeDL(ydl_opts_audio_only)
 
     # <editor-fold desc="Queue Management">
-    async def add_search(self, term, member, request_channel, send_embed=True):
+    async def add_search(self, term: str, member: discord.Member, request_channel: discord.TextChannel, send_embed: bool=True):
+        """Adds a search term to the queue."""
         url = "ytsearch:" + term
 
         # Get the first result
-        results = self.yt_dlp_audio.extract_info(url, download=False)
-        first_result_url = results["entries"][0]["url"]
+        results = youtube.get_info(url)
 
-        await self.add_song(first_result_url, member, request_channel, send_embed)
-
-    async def add_song(self, url, member, request_channel, send_embed=True):
-        if "youtube" in url:
-            media = YoutubeVideo(url, self.yt_dlp_audio)
-        elif "spotify" in url:
-            print("Spotify not supported!")
-            return
-        else:
-            print("Unknown not supported!")
+        # Check to make sure there is a result
+        if not results["entries"]:
+            await self.send_embed(request_channel, "Error", "No results found!")
             return
 
-        song_request = Request(media, member, request_channel)
+        first_result = results["entries"][0]
+
+        await self.add_youtube_entry(first_result, member, request_channel, send_embed)
+
+    async def add_youtube_entry(self, entry, member: discord.Member, request_channel: discord.TextChannel, send_embed:bool=True):
+        """Adds a specific youtube entry (most likely from a search) to the queue."""
+        media = YoutubeVideo(entry["url"], entry["title"])
+
+        song_request = Request("youtube", media, member, request_channel)
 
         # Add to the playlist
         await self.play_queue.append(song_request)
 
         # Send the embed if we are playing something right now
-        if self.voice_channel.is_playing() and send_embed:
-            await self.send_queued_embed(song_request)
+        if self.voice_client.is_playing() and send_embed:
+            await self.send_embed_queue(song_request)
 
-    async def add_playlist(self, url, member, request_channel):
+    async def add_youtube_url(self, url: str, member: discord.Member, request_channel: discord.TextChannel, send_embed:bool=True):
+        """Adds a specific youtube URL to the queue."""
+        media = YoutubeVideo(url)
+
+        song_request = Request("youtube", media, member, request_channel)
+
+        # Add to the playlist
+        await self.play_queue.append(song_request)
+
+        # Send the embed if we are playing something right now
+        if self.voice_client.is_playing() and send_embed:
+            await self.send_embed_queue(song_request)
+
+    async def add_playlist(self, url: str, member: discord.Member, request_channel:discord.TextChannel):
+        """Adds a playlist to the queue."""
         if "youtube" in url:
-            playlist = await self.add_playlist_youtube(url)
+            playlist = YoutubePlaylist(url)
         elif "spotify" in url:
             print("Spotify playlists not supported!")
             return
@@ -71,45 +89,46 @@ class Player:
             print("Unknown playlist not supported!")
             return
 
-        length = playlist.get_length()
-        playlist_items = playlist.info["entries"]
+        length: int = playlist.get_length()
+        playlist_items: dict[str, any] = playlist.info["entries"]
 
         for song in playlist_items:
             url = song["url"]
-            await self.add_song(url, member, request_channel, send_embed=False)
+            await self.add_youtube_url(url, member, request_channel, send_embed=False)
 
-        await self.send_playlist_embed(length, request_channel)
-
-    async def add_playlist_youtube(self, url):
-        return YoutubePlaylist(url, self.yt_dlp_audio)
+        await self.send_embed_playlist(length, request_channel)
     # </editor-fold>
 
     # <editor-fold desc="Embeds">
-    async def send_queued_embed(self, request):
+    async def send_embed(self, request_channel: discord.TextChannel, title: str, description: str):
+        """Send a Discord 'embed' message to a specific channel."""
+        embed = discord.Embed(title=title, description=description)
+
+        await request_channel.send(embed=embed)
+
+    async def send_embed_queue(self, request: Request):
+        """Sends an 'queued' embed to a specific channel."""
         message_title = "Queued!"
         message_description = "[{title}]({link})".format(
-            title=request.title,
-            link=request.url
+            title=request.media.title,
+            link=request.media.url
         )
+        await self.send_embed(request.channel, message_title, message_description)
 
-        embed = discord.Embed(title=message_title, description=message_description)
-
-        await request.channel.send(embed=embed)
-
-    async def send_playing_embed(self, request, next_up=None):
+    async def send_embed_playing(self, request: Request, next_up: Request=None):
+        """Send a 'now playing' embed to a specific channel."""
         message_title = "Now Playing!"
         message_description = "[{title}]({link}) {mention}".format(
-            title=request.title,
-            link=request.url,
+            title=request.media.title,
+            link=request.media.url,
             mention=request.member.mention
         )
 
         embed = discord.Embed(title=message_title, description=message_description)
 
         if next_up:
-            next_info = next_up.media.info
             next_url = next_up.media.url
-            next_title = next_info["title"]
+            next_title = next_up.media.title
 
             embed.add_field(
                 name="Up Next",
@@ -122,7 +141,8 @@ class Player:
 
         await request.channel.send(embed=embed)
 
-    async def send_playlist_embed(self, length, channel):
+    async def send_embed_playlist(self, length: int, channel: discord.TextChannel):
+        """Send a 'playlist' embed to a specific channel."""
         message_title = "Queued!"
         message_description = "Successfully added {length} tracks!".format(
             length=length
@@ -135,53 +155,77 @@ class Player:
 
     # <editor-fold desc="Player Control">
     def start_player(self):
+        """Start playing audio."""
         self.audio_player.start()
 
     def play_next(self, error):
+        """Get ready for the next media."""
         # Set the flag letting us know that song is over, so we may continue playing
         self.play_queue.index += 1
         self.is_playing_event.set()
 
     def pause(self):
-        self.voice_channel.pause()
+        """Pause the voice client."""
+        self.voice_client.pause()
 
     def resume(self):
-        self.voice_channel.resume()
+        """Resumes the voice client from a pause."""
+        self.voice_client.resume()
 
     def skip(self):
-        if self.voice_channel.is_playing():
-            self.voice_channel.stop()
+        """Skip the current media."""
+        if self.voice_client.is_playing():
+            self.voice_client.stop()
     # </editor-fold>
+
+    async def reset_player(self):
+        self.is_reset = True
+        await self.voice_client.disconnect()
 
     @tasks.loop(seconds=1.0)
     async def audio_player(self):
         # Reset the playing flag if it is set
         self.is_playing_event.clear()
 
-        print("running task")
-
         # We are currently playing audio, lets return and wait until we aren't
-        if self.voice_channel.is_playing():
+        if self.voice_client.is_playing():
             return
 
-        # There is nothing in the queue, so nothing to do
+        # If nothing is playing and the queue is empty, start a 10-minute timer
+        # At the end of the timer, kill the player
         if self.play_queue.is_empty():
+            if self.last_play_time is None:
+                self.last_play_time = datetime.now()
+
+            time_diff = self.last_play_time + timedelta(minutes=self.timeout)
+            if datetime.now() > time_diff:
+                await self.reset_player()
+            
+            # Queue is empty and there is nothing for us to do at this time
             return
 
-        # Get the next item in the queue
-        now_playing = await self.play_queue.get()
+        # Get the next item to play in the queue
+        now_playing: Request = await self.play_queue.get()
 
         # Give a preview of what's next
-        next_up = self.play_queue.get_next()
+        next_up: Request = self.play_queue.get_next()
+
+        # Make sure that both current and next songs have info available to them
+        now_playing.media.check_info()
+        if next_up:
+            next_up.media.check_info()
 
         # Send the "Now Playing" message
-        await self.send_playing_embed(now_playing, next_up)
+        await self.send_embed_playing(now_playing, next_up)
 
         # Get the audio source that we are going to play
         audio_source = now_playing.media.get_audio_source()
 
         # Play the audio!
-        self.voice_channel.play(audio_source, after=self.play_next)
+        try:
+            self.voice_client.play(audio_source, after=self.play_next)
+        except Exception as myException:
+            print("Voice Client exception!")
 
         # This will block until play_next has been called (song is over)
         await self.is_playing_event.wait()
@@ -189,92 +233,21 @@ class Player:
         # After the song is over, set our last played timer for the idle counter
         self.last_play_time = datetime.now()
 
-    async def return_playlist_info(self, request_channel, url):
-        vendor = self.get_vendor(url)
-        info = self.get_playlist_info(vendor, url)
-
-        message_title = "Info"
-        message_description = "URL: {url}".format(
-            url=url
-        )
-
-        embed = discord.Embed(title=message_title, description=message_description)
-
-        embed.add_field(
-            name="Vendor",
-            value=vendor,
-            inline=False
-        )
-
-        embed.add_field(
-            name="Playlist Length",
-            value=len(info["entries"]),
-            inline=False
-        )
-
-        await request_channel.send(embed=embed)
-
-    async def return_info(self, request_channel, url):
-        search = False
-        vendor = self.get_vendor(url)
-
-        # If vendor is None, assume it's a YouTube search
-        if not vendor:
-            vendor = "youtube"
-            search = True
-            url = "ytsearch:" + url
-
-        info = await self.get_info(vendor, url)
-
-        if search:
-            url = info["entries"][0]["url"]
-            info = await self.get_info(vendor, url)
-
-        title = self.get_title(vendor, info)
-        audio_url = self.get_best_audio_url(vendor, info)
-
-        message_title = "Info"
-        message_description = "URL: {url}".format(
-            url=url
-        )
-
-        embed = discord.Embed(title=message_title, description=message_description)
-
-        embed.add_field(
-            name="Vendor",
-            value=vendor,
-            inline=False
-        )
-
-        embed.add_field(
-            name="Title",
-            value=title,
-            inline=False
-        )
-
-        embed.add_field(
-            name="Audio Only URL",
-            value="Check output in program",
-            inline=False
-        )
-
-        await request_channel.send(embed=embed)
-
-        print(audio_url)
-
-    async def get_queue(self, channel, start=0, end=9):
+    async def get_queue(self, channel: discord.TextChannel, start: int=0, end: int=9):
+        """Print the queue to a specific channel"""
         # TODO: Give the queue a limit
         queue_text = "```\n"
 
-        for index, song in enumerate(self.playlist):
-            vendor = song.vendor
-            info = song.info
+        request: Request
+        for index, request in enumerate(self.play_queue.playlist):
+            vendor = request.vendor
+            info = request.media.info
 
-            title = self.get_title(vendor, info)
+            title = request.media.title
             if len(title) > 40:
                 title = title[:37] + "..."
 
-            if index == self.playlist_index:
+            if index == self.play_queue.index:
                 queue_text += "\t⬇⬇⬇ Now Playing ⬇⬇⬇\n"
 
             queue_text += "{index}) {title}".format(
@@ -282,9 +255,11 @@ class Player:
                 title=title
             )
 
-            if index == self.playlist_index:
+            if index == self.play_queue.index:
                 queue_text += "\n\t⬆⬆⬆ Now Playing ⬆⬆⬆"
 
             queue_text += "\n"
 
         queue_text += "```"
+
+        await self.send_embed(channel, "Queue", queue_text)

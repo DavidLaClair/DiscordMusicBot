@@ -1,19 +1,32 @@
 import discord
 
+from media.media import Media
+from utilities import youtube
 
-class YoutubeVideo:
-    def __init__(self, url, yt_dlp):
-        self.url = url
-        self.yt_dlp = yt_dlp
-        self.info = None
 
-        self.get_info()
+class YoutubeVideo(Media):
+    def __init__(self, url: str, title: str=None, info=None, is_video: bool=False):
+        super().__init__("youtube", url, title, is_video)
+        self.info = info
+        
+        if not info:
+            self.get_info()
+
+    def check_info(self):
+        """Get the info about the current video."""
+        if not self.info:
+            self.get_info()
 
     def get_info(self):
-        self.info = self.yt_dlp.extract_info(self.url, download=False)
+        """Get the JSON info about a youtube video."""
+        self.info = youtube.get_info(self.url)
+        self.title = self.info["title"]
 
     def get_audio_source(self):
-        audio_url = self.info["url"]
+        """Set the FFmpeg info for audio only on the current video."""
+        self.check_info()
+
+        audio_url:str = self.info["url"]
 
         audio = discord.FFmpegPCMAudio(
             source=audio_url,
