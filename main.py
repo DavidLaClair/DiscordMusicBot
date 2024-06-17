@@ -10,7 +10,7 @@ from utilities import url
 # TODO: Goodbye
 # TODO: Move things in queue
 # TODO: removing something from the queue
-# TODO: Spotify?
+# TODO: Spotify? 
 
 
 intents = discord.Intents.default()
